@@ -1,0 +1,615 @@
+{
+  "name": "VendorFlow - PO Delay & Follow-up Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "a46cee5c-a1c6-468d-8929-43e8be22ebad",
+      "name": "Daily 9 AM Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        208,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1TKUEnu-mcrrizfrcDIFtuaQjMv_us5sol4yBN7sXpZs",
+          "mode": "list",
+          "cachedResultName": "VendorFlow - Purchase Orders",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1TKUEnu-mcrrizfrcDIFtuaQjMv_us5sol4yBN7sXpZs/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Purchase Orders",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1TKUEnu-mcrrizfrcDIFtuaQjMv_us5sol4yBN7sXpZs/edit#gid=0"
+        },
+        "options": {}
+      },
+      "id": "5a104fe4-dedd-4be8-b116-c9eee554bdd2",
+      "name": "Get Purchase Orders",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        528,
+        80
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SR3CLhyybhhDq1Ri",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst ESCALATE_AFTER_DAYS = 3;\n\nconst today = $today.startOf('day');\nconst todayStr = today.toFormat('yyyy-MM-dd');\n\n// Convert Google Sheets date into a valid date\nfunction parseDate(value) {\n  if (!value) return null;\n\n  const s = String(value).trim();\n\n  let date = DateTime.fromISO(s);\n\n  if (date.isValid) return date.startOf('day');\n\n  const formats = [\n    'yyyy-MM-dd',\n    'dd/MM/yyyy',\n    'd/M/yyyy',\n    'MMM d, yyyy',\n    'MMMM d, yyyy',\n    'd MMM yyyy'\n  ];\n\n  for (const format of formats) {\n    date = DateTime.fromFormat(s, format);\n\n    if (date.isValid) {\n      return date.startOf('day');\n    }\n  }\n\n  return null;\n}\n\nconst results = [];\nconst orders = $input.all();\n\nfor (let i = 0; i < orders.length; i++) {\n  const r = orders[i].json;\n\n  const status = String(r['Status'] || '')\n    .trim()\n    .toLowerCase();\n\n  // 1. Process only pending orders\n  if (status !== 'pending') continue;\n\n  // 2. Calculate overdue days\n  const due = parseDate(r['Delivery Date']);\n\n  if (!due) continue;\n\n  const daysOverdue = Math.floor(\n    today.diff(due, 'days').days\n  );\n\n  if (daysOverdue < 1) continue;\n\n  // 3. Read existing follow-up information\n  const reminderCount = Number(r['Reminder Count'] || 0);\n\n  const lastReminderDate = String(\n    r['Last Reminder Date'] || ''\n  ).trim();\n\n  const escalated = String(\n    r['Escalated'] || ''\n  ).trim();\n\n  const escalatedDate = String(\n    r['Escalated Date'] || ''\n  ).trim();\n\n  const alreadyEscalated =\n    ['yes', 'true', '1'].includes(escalated.toLowerCase());\n\n  // 4. Decide action\n  let action = 'skip';\n\n  if (daysOverdue >= ESCALATE_AFTER_DAYS) {\n\n    if (!alreadyEscalated) {\n      action = 'escalate';\n    }\n\n  } else if (\n    reminderCount === 0 &&\n    !lastReminderDate\n  ) {\n\n    action = 'reminder';\n\n  }\n\n  if (action === 'skip') continue;\n\n  // Avoid sending reminders without an email\n  const supplierEmail = String(\n    r['Supplier Email'] || ''\n  ).trim();\n\n  if (action === 'reminder' && !supplierEmail) {\n    continue;\n  }\n\n  // 5. Prepare output for next nodes\n  results.push({\n    json: {\n      rowNumber: r['row_number'],\n      poId: r['PO ID'],\n      material: r['Material'],\n      supplier: r['Supplier'],\n      supplierEmail: supplierEmail,\n\n      deliveryDate: due.toFormat('yyyy-MM-dd'),\n      daysOverdue: daysOverdue,\n\n      action: action,\n\n      followUpStatus:\n        action === 'escalate'\n          ? 'Escalated to Manager'\n          : 'Reminder Sent',\n\n      newReminderCount:\n        action === 'reminder'\n          ? reminderCount + 1\n          : reminderCount,\n\n      newLastReminderDate:\n        action === 'reminder'\n          ? todayStr\n          : lastReminderDate,\n\n      newEscalated:\n        action === 'escalate'\n          ? 'Yes'\n          : escalated,\n\n      newEscalatedDate:\n        action === 'escalate'\n          ? todayStr\n          : escalatedDate,\n\n      sentTo:\n        action === 'escalate'\n          ? 'Manager'\n          : supplierEmail,\n\n      today: todayStr\n    },\n    pairedItem: { item: i }\n  });\n}\n\nreturn results;\n"
+      },
+      "id": "6abbd145-1450-4343-b25d-d978c806c0bc",
+      "name": "Evaluate Overdue POs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        832,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 4
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "reminder",
+                    "id": "d5ecb9a1-56f3-4668-8080-c0c4c2038b9e"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Reminder"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 4
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "escalate",
+                    "id": "c7a8c26b-24d4-4931-a57b-02904d7458ff"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Escalate"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fd266f5e-20c0-4f58-af78-4c11d8f6ab43",
+      "name": "Route by Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.5,
+      "position": [
+        1152,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.supplierEmail }}",
+        "subject": "=Delivery follow-up: {{ $json.poId }} ({{ $json.material }})",
+        "emailType": "text",
+        "message": "=Dear {{ $json.supplier }} team,\n\nThis is a follow-up on purchase order {{ $json.poId }} for {{ $json.material }}. The agreed delivery date was {{ $json.deliveryDate }}, so the order is now {{ $json.daysOverdue }} day(s) overdue.\n\nPlease reply with the current status of the shipment and a confirmed delivery date.\n\nThank you,\nProcurement Team",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "7b31dc4a-bcae-450b-a868-add14c5eded7",
+      "name": "Send Supplier Reminder",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1440,
+        192
+      ],
+      "webhookId": "d75accb7-094b-41a7-a83e-e80674e9e396",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "hZ8mBLJ4CrXPIb2B",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1TKUEnu-mcrrizfrcDIFtuaQjMv_us5sol4yBN7sXpZs",
+          "mode": "list",
+          "cachedResultName": "VendorFlow - Purchase Orders",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1TKUEnu-mcrrizfrcDIFtuaQjMv_us5sol4yBN7sXpZs/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Purchase Orders",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1TKUEnu-mcrrizfrcDIFtuaQjMv_us5sol4yBN7sXpZs/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "PO ID": "={{ $('Evaluate Overdue POs').item.json.poId }}",
+            "Follow-up Status": "={{ $('Evaluate Overdue POs').item.json.followUpStatus }}",
+            "Reminder Count": "={{ $('Evaluate Overdue POs').item.json.newReminderCount }}",
+            "Escalated": "={{ $('Evaluate Overdue POs').item.json.newEscalated }}",
+            "Last Reminder Date": "=\t{{ $('Evaluate Overdue POs').item.json.newLastReminderDate }}",
+            "Escalated Date": "={{ $('Evaluate Overdue POs').item.json.newEscalatedDate }}"
+          },
+          "matchingColumns": [
+            "PO ID"
+          ],
+          "schema": [
+            {
+              "id": "PO ID",
+              "displayName": "PO ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Material",
+              "displayName": "Material",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Supplier",
+              "displayName": "Supplier",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Supplier Email",
+              "displayName": "Supplier Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Delivery Date",
+              "displayName": "Delivery Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Follow-up Status",
+              "displayName": "Follow-up Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Reminder Count",
+              "displayName": "Reminder Count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Last Reminder Date",
+              "displayName": "Last Reminder Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Escalated",
+              "displayName": "Escalated",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Escalated Date",
+              "displayName": "Escalated Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "1ec80c30-2a98-4ea1-ae56-1b0385eeb7e5",
+      "name": "Record Follow-up on PO",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1744,
+        304
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SR3CLhyybhhDq1Ri",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1TKUEnu-mcrrizfrcDIFtuaQjMv_us5sol4yBN7sXpZs",
+          "mode": "list",
+          "cachedResultName": "VendorFlow - Purchase Orders",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1TKUEnu-mcrrizfrcDIFtuaQjMv_us5sol4yBN7sXpZs/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 655028261,
+          "mode": "list",
+          "cachedResultName": "Follow-up History",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1TKUEnu-mcrrizfrcDIFtuaQjMv_us5sol4yBN7sXpZs/edit#gid=655028261"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $('Evaluate Overdue POs').item.json.today }}",
+            "PO ID": "=\t{{ $('Evaluate Overdue POs').item.json.poId }}",
+            "Material": "={{ $('Evaluate Overdue POs').item.json.material }}",
+            "Supplier": "={{ $('Evaluate Overdue POs').item.json.supplier }}",
+            "Action": "={{ $('Evaluate Overdue POs').item.json.followUpStatus }}",
+            "Sent To": "={{ $('Evaluate Overdue POs').item.json.sentTo }}",
+            "Days Overdue": "{{ $('Evaluate Overdue POs').item.json.daysOverdue }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Date",
+              "displayName": "Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "PO ID",
+              "displayName": "PO ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Material",
+              "displayName": "Material",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Supplier",
+              "displayName": "Supplier",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Action",
+              "displayName": "Action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Days Overdue",
+              "displayName": "Days Overdue",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Sent To",
+              "displayName": "Sent To",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "dfff94c2-472a-4fa8-9ab5-0d841c31b09f",
+      "name": "Log Follow-up History",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2048,
+        304
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SR3CLhyybhhDq1Ri",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "goyaldevansh644@gmail.com",
+        "subject": "=ESCALATION: {{ $json.poId }} is {{ $json.daysOverdue }} days overdue ({{ $json.material }})",
+        "emailType": "text",
+        "message": "=Hello Manager,\n\nPurchase order {{ $json.poId }} ({{ $json.material }}) from {{ $json.supplier }} was due on {{ $json.deliveryDate }} and is now {{ $json.daysOverdue }} days overdue.\n\nSupplier Contact: {{ $json.supplierEmail }}\n\nPlease review the delayed order, follow up with the supplier, or consider an alternative source if necessary.\n\nRegards,\nVendorFlow Automation",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "4d78949b-4701-422b-99be-9d942068aa79",
+      "name": "Escalate to Manager",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1440,
+        432
+      ],
+      "webhookId": "fd2e18a9-9f9f-440a-8641-1d95371551d6",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "hZ8mBLJ4CrXPIb2B",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## VendorFlow setup\n**Spreadsheet needs 2 tabs**\n1. `Purchase Orders`: PO ID | Material | Supplier | Supplier Email | Delivery Date | Status | Follow-up Status | Reminder Count | Last Reminder Date | Escalated | Escalated Date\n2. `Follow-up History`: Date | PO ID | Material | Supplier | Action | Days Overdue | Sent To\n\n**Rules (edit in the Code node)**\n- Pending + past delivery date = overdue\n- 1-2 days overdue: one reminder to supplier\n- 3+ days overdue: one escalation to manager\n- Reminder Count / Escalated columns stop repeat emails\n\n**To do:** connect Google Sheets + Gmail, pick the spreadsheet in all 3 sheet nodes, set the manager email.",
+        "height": 320,
+        "width": 704,
+        "color": 4
+      },
+      "id": "111935a5-d4d0-4743-87e8-c63f7b502ff9",
+      "name": "Sticky Note 7c1464c9",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        368,
+        512
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Daily 9 AM Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Purchase Orders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Purchase Orders": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Overdue POs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Overdue POs": {
+      "main": [
+        [
+          {
+            "node": "Route by Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Action": {
+      "main": [
+        [
+          {
+            "node": "Send Supplier Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Escalate to Manager",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Supplier Reminder": {
+      "main": [
+        [
+          {
+            "node": "Record Follow-up on PO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Follow-up on PO": {
+      "main": [
+        [
+          {
+            "node": "Log Follow-up History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escalate to Manager": {
+      "main": [
+        [
+          {
+            "node": "Record Follow-up on PO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "55dc2efd-4c9e-43df-a3fe-c099803cad3f",
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp",
+    "templateCredsSetupCompleted": true,
+    "instanceId": "77fd83e4972d9c19702bd5172bc6545538fb18b7f2dfab8408cbf500539f9831"
+  },
+  "nodeGroups": [
+    {
+      "id": "f2321c76-d16a-4b64-84af-e99a5f4be64d",
+      "name": "Read and evaluate POs",
+      "nodeIds": [
+        "5a104fe4-dedd-4be8-b116-c9eee554bdd2",
+        "6abbd145-1450-4343-b25d-d978c806c0bc"
+      ],
+      "description": "Reads all purchase orders and keeps only overdue pending ones that have not been followed up yet"
+    },
+    {
+      "id": "51678f76-54f6-460f-8e91-7e21aa6f4782",
+      "name": "Send follow-ups and record",
+      "nodeIds": [
+        "fd266f5e-20c0-4f58-af78-4c11d8f6ab43",
+        "7b31dc4a-bcae-450b-a868-add14c5eded7",
+        "4d78949b-4701-422b-99be-9d942068aa79",
+        "1ec80c30-2a98-4ea1-ae56-1b0385eeb7e5",
+        "dfff94c2-472a-4fa8-9ab5-0d841c31b09f"
+      ],
+      "description": "Emails supplier or manager, then updates the PO row and logs history"
+    }
+  ],
+  "id": "ykvM7rYFsfm2gN1k",
+  "tags": []
+}
